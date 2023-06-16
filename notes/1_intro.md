@@ -162,7 +162,7 @@ root@localhost:ny_taxi>
 ```
 Also if you haven't installed psql on your local and still wanna access, you can connect to the container directly and the use psql there. for this, use below command
 ```bash
-docker exec -it 53aa300e8fa8 psql -U root ny_taxi
+docker exec -it ce37d9c1a277 psql -U root ny_taxi
 ```
 Now we don't have anything yet there, so we can just run something like
 ```bash
