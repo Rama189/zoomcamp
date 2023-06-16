@@ -128,7 +128,7 @@ A typical Airflow installation consists of the following components:
 ![airflow architecture](https://airflow.apache.org/docs/apache-airflow/stable/_images/arch-diag-basic.png)
 
 * The **scheduler** handles both triggering scheduled workflows as well as submitting _tasks_ to the executor to run. The scheduler is the main "core" of Airflow.
-* The **executor** handles running tasks. In a default installation, the executor runs everything inside the scheduler but most production-suitable executors push task execution out to _workers_.
+* The **executor** handles running tasks. In a default installation, the executor runs everything inside the scheduler but most production-suitable executors push task execution out to _workers_. (Also check types of executer below)
 * A **worker** simply executes tasks given by the scheduler.
 * A **webserver** which seves as the GUI.
 * A **DAG directory**; a folder with _DAG files_ which is read by the scheduler and the executor (an by extension by any worker the executor might have)
@@ -143,7 +143,7 @@ A typical Airflow installation consists of the following components:
 * `./logs` - contains logs from task execution and scheduler.
 * `./plugins` - for custom plugins
 
-Additional definitions:
+Additional definitions & Info:
 * ***DAG***: Directed acyclic graph, specifies the dependencies between a set of tasks with explicit execution order, and has a beginning as well as an end. (Hence, “acyclic”). A _DAG's Structure_ is as follows:
   * DAG Definition
   * Tasks (eg. Operators)
@@ -155,6 +155,69 @@ Additional definitions:
 * ***DAG Run***: individual execution/run of a DAG. A run may be scheduled or triggered.
 * ***Task Instance***: an individual run of a single task. Task instances also have an indicative state, which could be `running`, `success`, `failed`, `skipped`, `up for retry`, etc.
     * Ideally, a task should flow from `none`, to `scheduled`, to `queued`, to `running`, and finally to `success`.
+
+## Types of Executor
+
+### SequentialExecutor
+
+SequentialExecutor runs only one task at a time. The workers run the same machine as the scheduler is.
+
+#### Pros
+
+1. Simple and easy to setup
+2. Good for testing DAGs during development
+
+#### Cons
+
+1. Not scalable
+2. It cannot run multiple tasks at the same time.
+3. Not suitable for production
+
+### LocalExecutor
+
+LocalExecutor is the same as the Sequential Executor, except it can run multiple tasks at a time.
+
+#### Pros
+
+1. Can run multiple tasks
+2. Good for running DAGs during development
+
+#### Cons
+
+1. Not scalable
+2. Single point of failure
+3. Not suitable for production
+
+### CeleryExecutor
+
+Celery is used for running distributed asynchronous python tasks.
+
+Hence, CeleryExecutor has been a part of Airflow for a long time, even before Kubernetes.
+
+CeleryExecutors has a fixed number of workers running to pick-up the tasks as they get scheduled.
+
+#### Pros
+
+1. It provides scalability.
+2. Celery manages the workers. In case of a failure, Celery spins up a new one.
+
+#### Cons
+
+1. Celery needs RabbitMQ/Redis to for queuing the task, which is reinventing the wheel of what Airflow already supports.
+2. The above dependency also makes the setup complex.
+
+### KubernetesExecutor
+
+KubernetesExecutor runs each task in an individual Kubernetes pod. Unlike CeleryCelery, [it spins up worker pods on demand](../deploying-airflow-on-kubernetes/), hence enabling maximum usage of resources.
+
+#### Pros
+
+1. It Combines the pros of scalability and simplicity of CeleryExecutor and LocalExecutor.
+2. Fine-grained control over resources allocated to tasks. One can define the amount of CPU/memory required at a task level.
+
+#### Cons
+
+1. Kubernetes is new to Airflow, and the documentation is not straightforward.
 
 ## Setting up Airflow with Docker
 
@@ -268,3 +331,317 @@ LINE 1: INSERT INTO log (dttm, dag_id, task_id, event, execution_dat...
     airflow db upgrade
     ```
     That's finally able to access airflow gui on localhost:8080 and able to login! yay!
+
+## Creating a DAG
+
+_For reference, check out [Airflow's docs](https://airflow.apache.org/docs/apache-airflow/stable/concepts/dags.html)._
+
+A DAG is created as a Python script which imports a series of libraries from Airflow.
+
+There are [3 different ways of declaring a DAG](https://airflow.apache.org/docs/apache-airflow/stable/concepts/dags.html#declaring-a-dag). Here's an example definition using a _[context manager](https://book.pythontips.com/en/latest/context_managers.html)_:
+
+```python
+with DAG(dag_id="my_dag_name") as dag:
+    op1 = DummyOperator(task_id="task1")
+    op2 = DummyOperator(task_id="task2")
+    op1 >> op2
+```
+* When declaring a DAG we must provide at least a `dag_id` parameter. There are many additional parameters available.
+* The content of the DAG is composed of _tasks_. This example contains 2 _operators_, which are predefined tasks provided by Airflow's libraries and plugins.
+  * An operator only has to be declared with any parameters that it may require. There is no need to define anything inside them.
+  * All operators must have at least a `task_id` parameter.
+* Finally, at the end of the definition we define the _task dependencies_, which is what ties the tasks together and defines the actual structure of the DAG.
+  * Task dependencies are primarily defined with the `>>` (downstream) and `<<` (upstream) control flow operators.
+  * Additional functions are available for more complex control flow definitions.
+* A single Python script may contain multiple DAGs.
+
+Many operators inside a DAG may have common arguments with the same values (such as `start_date`). We can define a `default_args` dict which all tasks within the DAG will inherit:
+
+```python
+default_args = {
+    'start_date': datetime(2016, 1, 1),
+    'owner': 'airflow'
+}
+
+with DAG('my_dag', default_args=default_args) as dag:
+    op = DummyOperator(task_id='dummy')
+    print(op.owner)  # "airflow"
+```
+
+For this lesson we will focus mostly on operator tasks. Here are some examples:
+
+```python
+download_dataset_task = BashOperator(
+    task_id="download_dataset_task",
+    bash_command=f"curl -sS {dataset_url} > {path_to_local_home}/{dataset_file}"
+)
+```
+* A `BashOperator` is a simple bash command which is passed on the `bash_command` parameter. In this example, we're doenloading some file.
+
+```python
+  format_to_parquet_task = PythonOperator(
+      task_id="format_to_parquet_task",
+      python_callable=format_to_parquet,
+      op_kwargs={
+          "src_file": f"{path_to_local_home}/{dataset_file}",
+      },
+  )
+```
+* A `PythonOperator` calls a Python method rather than a bash command.
+* In this example, the `python_callable` argument receives a function that we've defined before in the DAG file, which receives a file name as a parameter then opens that file and saves it in parquet format.
+* the `op_kwargs` parameter is a dict with all necessary parameters for the function we're calling. This example contains a single argument with a file name.
+
+A list of operators is available on [Airflow's Operators docs](https://airflow.apache.org/docs/apache-airflow/stable/concepts/operators.html). A list of GCP-specific operators [is also available](https://airflow.apache.org/docs/apache-airflow-providers-google/stable/operators/cloud/index.html).
+
+As mentioned before, DAGs can be scheduled. We can define a schedule in the DAG definition by including the `start_date` and `schedule_interval` parameters, like this:
+
+```python
+from datetime import datetime
+
+with DAG(
+    dag_id="my_dag_name",
+    schedule_interval="0 6 2 * *",
+    start_date=datetime(2021, 1, 1)
+  ) as dag:
+    op1 = DummyOperator(task_id="task1")
+    op2 = DummyOperator(task_id="task2")
+    op1 >> op2
+```
+* The scheduler will run a job ***AFTER*** the start date, at the ***END*** of the interval
+* The interval is defined as a [cron job](https://www.wikiwand.com/en/Cron) expression. You can use [crontab guru](https://www.wikiwand.com/en/Cron) to define your own.
+  * In this example, `0 6 2 * *` means that the job will run at 6:00 AM on the second day of the month each month.
+* The starting date is what it sounds like: defines when the jobs will start.
+  * The jobs will start ***AFTER*** the start date. In this example, the starting date is January 1st, which means that the job won't run until January 2nd.
+
+## Running DAGs
+
+DAG management is carried out via Airflow's web UI.
+
+![airflow ui](images/02_01.png)
+
+There are 2 main ways to run DAGs:
+* Triggering them manually via the web UI or programatically via API
+* Scheduling them
+
+When you trigger or schedule a DAG, a DAG instance is created, called a ***DAG run***. DAG runs can run in **parallel for the same DAG** for separate data intervals.
+
+Each task inside a DAG is also instantiated, and a state is given to each task instance. Ideally, a task should flow from `none`, to `scheduled`, to `queued`, to `running`, and finally to `success`.
+
+In the DAGs dashboard, all available DAGs are shown along with their schedule, last and next runs and the status of the DAG's tasks.
+
+You may manually trigger a DAG by clicking on the Play button on the left of each DAG.
+
+A more detailed view and options for each DAG can be accessed by clicking on the DAG's name.
+
+![dag details](images/02_02.png)
+
+The tree view is offered by default, but you can get a graph view of the DAG by clicking on the _Graph_ button.
+
+![dag details](images/02_03.png)
+
+The status of each task can be seen in both views as you trigger a DAG.
+
+## Airflow and DAG tips and tricks
+
+* The default Airflow Docker image does not have `wget` by default. You can either add a line to your custom image to install it or you can use `curl` instead. Here's how to handle file downloading:
+  ```python
+  import os
+  AIRFLOW_HOME = os.environ.get("AIRFLOW_HOME", "/opt/airflow/")
+  URL_PREFIX = 'https://s3.amazonaws.com/nyc-tlc/trip+data' 
+  URL_TEMPLATE = URL_PREFIX + '/yellow_tripdata_{{ execution_date.strftime(\'%Y-%m\') }}.csv'
+  OUTPUT_FILE_TEMPLATE = AIRFLOW_HOME + '/output_{{ execution_date.strftime(\'%Y-%m\') }}.csv'
+
+  with my_worflow as dag:
+    download_task = BashOperator(
+      task_id = 'download'
+      bash_command=f'curl -sSL {URL_TEMPLATE} > {OUTPUT_FILE_TEMPLATE}'
+    )
+  ```
+  * We want to periodically download data each month and the filename changes according to the name and month. We can use _templating_ to parametrize the filename.
+    * Airflow uses the [Jinja template engine](https://jinja.palletsprojects.com/en/3.0.x/).
+    * Jinja templates make use of `{%...%}` for statements (control structures such as `if` and `for`, macros, etc) and `{{...}}` for expressions (literals, math and logic operators, variables, Python methods, etc). 
+    * Airflow offers a series of predefined variables and macros which can be consulted [in this link](https://airflow.apache.org/docs/apache-airflow/stable/templates-ref.html).
+    * We use a template to rename the file with the current year and month that the task is running:
+      * `execution_date` is an Airflow variable that returns the _execution date_ (or _logical date_ in newer versions of Airflow) of the task, which denotes the current data interval as specified by the `start_date` of the DAG and the number of executions. In this example, this is useful to download past data, since we can trigger this DAG manually and in each execution the execution date will increase by the amount specified in the `schedule_interval`, thus allowing us to download data for multiple months by simply rerunning the DAG.
+        * Do not confuse this variable with the actual current date!
+      * `strftime()` is a Python function that returns a string representing a date. You can check how to define the format of the string [in this link](https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior). In this example we're outputting the year and month.   
+  * `curl` command:
+    * Like all other commands, options can be stacked if there aren't additional parameters. In this case, `-sS` is the same as `-s -S`.
+    * `-s` is the same as `--silent`; it won't output any progress meters on the console.
+    * `-S` is the same as `--show-error`; when combined with silent mode as `-sS`, it will print error messages if any but will not show any progress output.
+    * `-L` will follow a link in case the original URL redirects somewhere else.
+    * By default, `curl` outputs to console. We could use the `-o` option to print to a file or redirect the output in the shell with `>` as shown here.
+* When creating a custom Airflow Docker image, in the Dockerfile, when installing additional packages with `pip`, it's a good idea to disable caching in order to make smaller images:
+  ```dockerfile
+  RUN pip install --no-cache-dir -r requirements.txt
+  ```
+* The `.env` file we created during [Airflow setup](#setup) is useful por passing environment variables which can later be reused in multiple places rather than having them hardcoded:
+  1. Define your variables inside `.env`. For example:
+      ```bash
+      PG_HOST=pgdatabase
+      PG_USER=root
+      PG_PASSWORD=root
+      ```
+  1. Add the environment variables in `docker-compose.yaml` inside the `x-airflow-common` environment definition:
+      ```yaml
+      PG_HOST: "${PG_HOST}"
+      PG_USER: "${PG_USER}"
+      PG_PASSWORD: "${PG_PASSWORD}"
+      ```
+  1. In your DAG, grab the variables with `os.getenv()`:
+      ```python
+      PG_HOST = os.getenv('PG_HOST')
+      PG_USER = os.getenv('PG_USER')
+      PG_PASSWORD = os.getenv('PG_PASSWORD')
+      ```
+  1. In Python Operator tasks inside a DAG, you can pass arguments as a dict. Instead of `op_kwargs={'key':'value'}`, you can use `op_kwargs=dict(host=PG_HOST, ...)` to define the arguments dictionay in an easier way.
+* A key design principle of tasks and DAGs is ***idempotency***. A task is ***idempotent*** if the end result is identical regardless of whether we run the task once or multiple times.
+  * For example, if we create a DAG to handle ingestion to our database, the DAG is idempotent if the final table in the database is the same whether we run the DAG once or many times. If it created multiple duplicate tables or multiple records in a single table, then the DAG is NOT idempotent.
+  * In our ingestion code, we managed idempotency by dropping any pre-existing databases and recreataing them from scratch.
+* You can define multiple DAGs in a single file. Remember that there are [multiple ways of declaring a DAG](https://airflow.apache.org/docs/apache-airflow/stable/concepts/dags.html#declaring-a-dag); we can use this to recycle code for multiple different DAGs:
+  * Define a function with all the arguments you may need such as filenames or buckets as well as a `dag` parameter, and inside the function declare the DAG with a context manager with all of your base tasks:
+    ```python
+    def my_cool_dag_function(dag, param_1, param_2, ...):
+      with dag:
+        task_1 = BashOperator(task_id=param_1, ...)
+        task_2 = PythonOperator(task_id=param_2, ...)
+        # ...
+        task_1 >> task_2 >> ...
+    ```
+  * Create as many DAG objects as you need using standard constructors:
+    ```python
+    first_dag = DAG(
+      dag_id='first_dag',
+      schedule_interval=@daily,
+      ...
+    )
+
+    second_dag = DAG(
+      dag_id='second_dag',
+      ...
+    )
+
+    # ...
+    ```
+  * Call your function as many times as the amount of DAGs you've defined and pass the DAG objects as params to your function.
+    ```python
+    my_cool_dag_function(
+      first_dag,
+      param_1=...,
+      param_2=...,
+      ...
+    )
+
+    my_cool_dag_function(
+      second_dag,
+      param_1=...,
+      param_2=...,
+      ...
+    )
+
+    #...
+    ```
+  * You can check an example DAG file with 3 DAGs [in this link](https://github.com/DataTalksClub/data-engineering-zoomcamp/raw/main/week_2_data_ingestion/homework/solution.py).
+
+_[Back to the top](#table-of-contents)_
+
+# Airflow in action
+
+We will now learn how to use Airflow to populate a Postgres database locally and in GCP's BigQuery.
+
+A rough outline of steps we would take in the context of what we have done till now:
+* Start with the docker-compose we already used to setup airflow locally.
+
+## Ingesting data to local Postgres with Airflow
+
+_[Video source](https://www.youtube.com/watch?v=s2U8MWJH5xA&list=PL3MmuxUbc_hJed7dXYoJw8DoCuVHhGEQb&index=20)_
+
+We want to run our Postgres setup from last section locally as well as Airflow, and we will use the `ingest_data.py` script from a DAG to ingest the NYC taxi trip data to our local Postgres.
+
+1. Prepare an ingestion script. We will use [this `ingest_script.py` file](../2_data_ingestion/airflow/dags/ingest_script.py).
+    * This script is heavily based on the script from last session, but the code has been wrapped inside a `ingest_callable()` method that will receive parameters from Airflow in order to connect to the database.
+    * We originally ran a dockerized version of the script; we could dockerize it again with a special `DockerOperator` task but we will simply run it with `PythonOperator` in our DAG for simplicity.
+1. Prepare a DAG. We will use [this `data_ingestion_local.py` DAG file](../2_data_ingestion/airflow/dags/data_ingestion_local.py). The DAG will have the following tasks:
+    1. A download `BashOperator` task that will download the NYC taxi data.
+    1. A `PythonOperator` task that will call our ingest script in order to fill our database.
+    1. All the necessary info for connecting to the database will be defined as environment variables.
+1. Modify the `.env` file to include all the necessary environment files. We will use [this `.env` file](../2_data_ingestion/airflow/.env).
+1. Modify the Airflow `docker-compose.yaml` file to include the environment variables. We will use [this `docker-compose.yaml` file](../2_data_ingestion/airflow/docker-compose.yaml).
+1. Modify the custom Airflow Dockerfile so that we can run our script (this is only for the purposes of this exercise) by installing the additional Python libraries that the `ingest_script.py` file needs. We will use [this Dockerfile](../2_data_ingestion/airflow/Dockerfile).
+    * Add this right after installing the `requirements.txt` file: `RUN pip install --no-cache-dir pandas sqlalchemy psycopg2-binary`
+1. Rebuild the Airflow image with `docker-compose build` and initialize the Airflow config with `docker-compose up airflow-init`.
+1. Start Airflow by using `docker-compose up` and on a separate terminal, find out which virtual network it's running on with `docker network ls`. It most likely will be something like `airflow_default`.
+1. Modify the `docker-compose.yaml` file from lesson 1 by adding the network info and commenting away the pgAdmin service in order to reduce the amount of resources we will consume (we can use `pgcli` to check the database). We will use [this `docker-compose-lesson2.yaml` file](../1_intro/docker-compose-lesson2.yaml).
+1. Run the updated `docker-compose-lesson2.yaml` with `docker-compose -f docker-compose-lesson2.yaml up` . We need to explicitly call the file because we're using a non-standard name.
+1. Optionally, you can login to a worker container and try to access the database from there.
+    1. Run `docker ps` and look for a `airflow_airflow-worker` container. Copy the container ID.
+    1. Login to the worker container with `docker exec -it <container_id> bash`
+    1. Run `python` to start Python's interactive mode. Run the following lines:
+        ```python
+        from sqlalchemy import create_engine
+        engine = create_engine('postgresql://root:root@pgdatabase:5432/ny_taxi')
+        engine.connect()
+        ```
+    1. You should see the output of the `connect()` method. You may now exit both the Python console and logout from the container.
+1. Open the Airflow dashboard and trigger the `LocalIngestionDag` DAG by clicking on the Play icon. Inside the detailed DAG view you will find the status of the tasks as they download the files and ingest them to the database. Note that the DAG will run as many times as stated in the drop down menu, which is 25 by default.
+    ![DAG in progress](images/02_04.png)
+1. Click on any of the colored squares to see the details of the task.
+    ![task details](images/02_05.png)
+    ![task details](images/02_06.png)
+    ![task details](images/02_07.png)
+1. As both the download and ingest tasks finish and the squares for both turn dark green, you may use `pgcli -h localhost -p 5432 -u root -d ny_taxi` on a separate terminal to check the tables on your local Postgres database. You should see a new table per run.
+1. Once you're finished, remember to use `docker-compose down` on both the Airflow and Postgres terminals.
+
+Wow, the data is loaded to postgres, below is the record count:
+```bash
+ny_taxi=# select count(*) from yellow_taxi_2021_06;
+  count
+---------
+ 2834264
+(1 row)
+```
+
+## Problems I faced while executing above thing:
+* The network which we need to specify to talk to another docker compose objects, the syntax for external has been changed a bit. It should be corrected as below:
+```bash
+networks:
+  airflow:
+    name: airflow_default
+    external: true
+```
+
+* The port issue again, the 5431 port is for your damn localhost, the inner port is the one you always need to connect when connecting through outer objects to your docker network object! This is the same stupid mistake again! Huh!
+* the damn table names on postgresql shouldn't contain anything, other than alphanum and '_'.
+* I used tar files unlike the tutorial says csv, so had to change about how pandas read that, I mean i did this anyway in earlier ingest script, but just saying.
+
+## Ingesting data to GCP
+
+#TODO - Tbh, haven't done this practically, but this is the same old thing, will come back to implement this later
+
+_[Video source](https://www.youtube.com/watch?v=9ksX9REfL8w&list=PL3MmuxUbc_hJed7dXYoJw8DoCuVHhGEQb&index=19)_
+
+We will now run a slightly more complex DAG that will download the NYC taxi trip data, convert it to parquet, upload it to a GCP bucket and ingest it to GCP's BigQuery.
+
+1. Prepare a DAG for the aforementioned tasks. We will use [this DAG file](../2_data_ingestion/airflow/dags/data_ingestion_gcs_dag.py). Copy it to the `/dags` subdirectory in your work folder.
+    * A `BashOperator` is used to download the dataset and then 2 `PythonOperator` tasks are used to format the file to parquet and then upload the file to a GCP bucket.
+        * You may find more info on how to programatically upload to a bucket with Python [in this link](https://cloud.google.com/storage/docs/uploading-objects#storage-upload-object-python).
+    * A `BigQueryCreateExternalTableOperator` is used for ingesting the data into BigQuery. You may read more about it [in this link](https://airflow.apache.org/docs/apache-airflow/1.10.12/_api/airflow/contrib/operators/bigquery_operator/index.html).
+1. If not started, run Airflow with `docker-compose up airflow-init` and then `docker-compose up`.
+1. Select the DAG from Airflow's dashboard and trigger it.
+1. Once the DAG finishes, you can go to your GCP project's dashboard and search for BigQuery. You should see your project ID; expand it and you should see a new `trips_data_all` database with an `external_table` table.
+    ![bigquery](images/02_08.png)
+1. Click on the 3 dots next to `external_table` and click on _Open_ to display the table's schema.
+    ![bigquery](images/02_09.png)
+1. Click on the 3 dots next to `external_table` and click on _Query_. Run the following SQL query to show the top 10 rows in the database:
+    ```sql
+    SELECT * FROM `animated-surfer-338618.trips_data_all.external_table` LIMIT 10
+    ```
+    ![bigquery](images/02_10.png)
+1. You can also see the uploaded parquet file by searching the _Cloud Storage_ service, selecting your bucket and then clickin on the `raw/` folder. You may click on the filename to access an info panel.
+    ![bigquery](images/02_11.png)
+    ![bigquery](images/02_12.png)
+    ![bigquery](images/02_13.png)
+    ![bigquery](images/02_14.png)
+1. You may now shutdown Airflow by running `docker-compose down` on the terminal where you run it.
+
+_[Back to the top](#table-of-contents)_
