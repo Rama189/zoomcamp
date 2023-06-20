@@ -7,6 +7,36 @@
 >>Extra: [Preparing Data for Spark](extra1_preparing_data.md)
 
 ### Table of contents
+- [Introduction to Analytics Engineering](#introduction-to-analytics-engineering)
+  - [What is Analytics Engineering?](#what-is-analytics-engineering)
+  - [Data Modeling Concepts](#data-modeling-concepts)
+    - [ETL vs ELT](#etl-vs-elt)
+    - [Dimensional Modeling](#dimensional-modeling)
+- [Introduction to dbt](#introduction-to-dbt)
+  - [What is dbt?](#what-is-dbt)
+  - [How does dbt work?](#how-does-dbt-work)
+  - [How to use dbt?](#how-to-use-dbt)
+- [Setting up dbt](#setting-up-dbt)
+  - [dbt Cloud](#dbt-cloud)
+  - [dbt Core](#dbt-core)
+- [Developing with dbt](#developing-with-dbt)
+  - [Anatomy of a dbt model](#anatomy-of-a-dbt-model)
+  - [The FROM clause](#the-from-clause)
+  - [Defining a source and creating a model](#defining-a-source-and-creating-a-model)
+  - [Macros](#macros)
+  - [Packages](#packages)
+  - [Variables](#variables)
+  - [Referencing older models in new models](#referencing-older-models-in-new-models)
+- [Testing and documenting dbt models](#testing-and-documenting-dbt-models)
+  - [Testing](#testing)
+  - [Documentation](#documentation)
+- [Deployment of a dbt project](#deployment-of-a-dbt-project)
+  - [Deployment basics](#deployment-basics)
+  - [Continuous Integration](#continuous-integration)
+  - [Deployment using dbt Cloud](#deployment-using-dbt-cloud)
+  - [Deployment using dbt Core (local)](#deployment-using-dbt-core-local)
+- [Data visualization](#data-visualization)
+  - [Google Data Studio](#google-data-studio)
 
 # Introduction to Analytics Engineering
 
@@ -159,6 +189,37 @@ Green Taxi Data (2019-2020)
 FHV Data (2019)
 
 dbt (Data Build Tool) . We can use it in two ways, either through the free SaaS for individual users by registering on the dbt Cloud website or downloading the package to work locally and with the CLI console. It can be downloaded in several ways, the easiest in my opinion is with pip in our Python environment. The official introductory course (duration: 5 hours) is very interesting .
+
+BTW, if you haen't done previous steps of data ingestion or removed those files from gcloud.follow the below quickest way to load data.
+1. To load data to buckets, run web_to_gcs.py script, it will take care! make sure urls are right! this is present in your first practical project folder. this step will convert those tar csv files to parquet for green and yellow data and stores in the bucket
+2.  Once we have loaded all the tripdata csv.gz files into our GCS Bucket , we are going to create the external tables to consume them as BigQuery tables, use below commands for the same.
+
+```bash
+CREATE OR REPLACE EXTERNAL TABLE trips_data_all.fhv_tripdata
+OPTIONS (
+  format = 'CSV',
+  uris = ['gs://tripdata_n4gash/data/fhv/*.csv.gz']
+);
+
+CREATE OR REPLACE EXTERNAL TABLE trips_data_all.green_tripdata
+OPTIONS (
+  format = 'CSV',
+  uris = ['gs://tripdata_n4gash/data/green/*.csv.gz']
+);
+
+CREATE OR REPLACE EXTERNAL TABLE trips_data_all.yellow_tripdata
+OPTIONS (
+  format = 'CSV',
+  uris = ['gs://tripdata_n4gash/data/yellow/*.csv.gz']
+);
+
+CREATE OR REPLACE EXTERNAL TABLE trips_data_all.zones_tripdata
+OPTIONS (
+  format = 'CSV',
+  uris = ['gs://tripdata_n4gash/data/taxi+_zone_lookup.csv']
+);
+```
+
 
 # Setting up dbt
 
